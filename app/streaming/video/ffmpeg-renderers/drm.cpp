@@ -809,6 +809,16 @@ int DrmRenderer::getRendererAttributes()
 
 void DrmRenderer::setHdrMode(bool enabled)
 {
+    // Mark that we're about to mutate DRM connector/property state so the
+    // destructor knows it must tear down HDR / colorspace on the way out.
+    // Set before the actual property writes: any attempt to change state
+    // (even if a single drmModeObjectSetProperty call fails and we log
+    // non-fatal) means the connector may be in a modified state and we
+    // should attempt restoration.
+    if (enabled) {
+        m_DrmStateModified = true;
+    }
+
     if (m_ColorspaceProp != nullptr) {
         int err = drmModeObjectSetProperty(m_DrmFd, m_ConnectorId, DRM_MODE_OBJECT_CONNECTOR,
                                            m_ColorspaceProp->prop_id,
