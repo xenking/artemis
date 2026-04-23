@@ -74,7 +74,7 @@ Uint32 StreamUtils::getPlatformWindowFlags()
     return SDL_WINDOW_METAL;
 #elif defined(HAVE_LIBPLACEBO_VULKAN)
     // We'll fall back to GL if Vulkan fails
-    return SDL_WINDOW_VULKAN;
+    return 0;
 #else
     return 0;
 #endif

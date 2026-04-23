@@ -83,8 +83,7 @@ EGLRenderer::EGLRenderer(IFFmpegRenderer *backendRenderer)
         m_eglClientWaitSync(nullptr),
         m_GlesMajorVersion(0),
         m_GlesMinorVersion(0),
-        m_HasExtUnpackSubimage(false),
-        m_DummyRenderer(nullptr)
+        m_HasExtUnpackSubimage(false)
 {
     SDL_assert(backendRenderer);
     SDL_assert(backendRenderer->canExportEGL());
@@ -130,10 +129,6 @@ EGLRenderer::~EGLRenderer()
         SDL_GL_DeleteContext(m_Context);
     }
 
-    if (m_DummyRenderer) {
-        SDL_DestroyRenderer(m_DummyRenderer);
-    }
-
     av_frame_free(&m_LastFrame);
 
     // Reset the global properties back to what they were before
@@ -167,6 +162,15 @@ void EGLRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
 
 bool EGLRenderer::notifyWindowChanged(PWINDOW_STATE_CHANGE_INFO info)
 {
+    // On KMSDRM, prevent ALL renderer recreation - recreating the EGL renderer
+    // triggers CRTC corruption (Could not restore CRTC / eglSwapBuffers failed).
+    // The EGL renderer can handle size/display changes transparently, and on
+    // KMSDRM there's no window manager to trigger other state changes.
+    const char* vdrv = SDL_GetCurrentVideoDriver();
+    if (vdrv && strcmp(vdrv, "KMSDRM") == 0) {
+        return true;
+    }
+
     // We can transparently handle size and display changes
     return !(info->stateChangeFlags & ~(WINDOW_STATE_CHANGE_SIZE | WINDOW_STATE_CHANGE_DISPLAY));
 }
@@ -449,34 +453,37 @@ bool EGLRenderer::initialize(PDECODER_PARAMETERS params)
         return false;
     }
 
-    m_DummyRenderer = SDL_CreateRenderer(m_Window, renderIndex, SDL_RENDERER_ACCELERATED);
-    if (!m_DummyRenderer) {
-        // Print the error here (before it gets clobbered), but ensure that we flush window
-        // events just in case SDL re-created the window before eventually failing.
-        EGL_LOG(Error, "SDL_CreateRenderer() failed: %s", SDL_GetError());
-    }
+    // On KMSDRM, skip the dummy renderer entirely. SDL_CreateRenderer triggers
+    // SDL_RecreateWindow which calls KMSDRM_DestroySurfaces -> "Could not restore CRTC"
+    // and corrupts the EGL surface. On KMSDRM, SDL_GL_CreateContext works directly
+    // without needing the window to be recreated by SDL_CreateRenderer first.
+    const char* currentVideoDriver = SDL_GetCurrentVideoDriver();
+    bool isKmsdrm = currentVideoDriver && strcmp(currentVideoDriver, "KMSDRM") == 0;
 
-    // SDL_CreateRenderer() can end up having to recreate our window (SDL_RecreateWindow())
-    // to ensure it's compatible with the renderer's OpenGL context. If that happens, we
-    // can get spurious SDL_WINDOWEVENT events that will cause us to (again) recreate our
-    // renderer. This can lead to an infinite to renderer recreation, so discard all
-    // SDL_WINDOWEVENT events after SDL_CreateRenderer().
-    Session* session = Session::get();
-    if (session != nullptr) {
-        // If we get here during a session, we need to synchronize with the event loop
-        // to ensure we don't drop any important events.
-        session->flushWindowEvents();
-    }
-    else {
-        // If we get here prior to the start of a session, just pump and flush ourselves.
-        SDL_PumpEvents();
-        SDL_FlushEvent(SDL_WINDOWEVENT);
-    }
+    if (!isKmsdrm) {
+        SDL_Renderer* dummyRenderer = SDL_CreateRenderer(m_Window, renderIndex, SDL_RENDERER_ACCELERATED);
+        if (!dummyRenderer) {
+            EGL_LOG(Error, "SDL_CreateRenderer() failed: %s", SDL_GetError());
+        }
 
-    // Now we finally bail if we failed during SDL_CreateRenderer() above.
-    if (!m_DummyRenderer) {
-        m_InitFailureReason = InitFailureReason::NoSoftwareSupport;
-        return false;
+        // SDL_CreateRenderer() can end up having to recreate our window (SDL_RecreateWindow())
+        Session* session = Session::get();
+        if (session != nullptr) {
+            session->flushWindowEvents();
+        }
+        else {
+            SDL_PumpEvents();
+            SDL_FlushEvent(SDL_WINDOWEVENT);
+        }
+
+        if (!dummyRenderer) {
+            m_InitFailureReason = InitFailureReason::NoSoftwareSupport;
+            return false;
+        }
+
+        SDL_DestroyRenderer(dummyRenderer);
+    } else {
+        EGL_LOG(Info, "KMSDRM: Skipping dummy renderer to preserve CRTC state");
     }
 
     SDL_SysWMinfo info;
@@ -647,8 +654,12 @@ bool EGLRenderer::initialize(PDECODER_PARAMETERS params)
     if (err == GL_NO_ERROR) {
         // If we got a working GL implementation via EGL, avoid using GLX from now on.
         // GLX will cause problems if we later want to use EGL again on this window.
-        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "EGL passed preflight checks. Using EGL for GL context creation.");
-        SDL_SetHint(SDL_HINT_VIDEO_X11_FORCE_EGL, "1");
+        // Only set this hint on X11 - on KMSDRM it can trigger egl_surface_dirty.
+        const char* vdrv = SDL_GetCurrentVideoDriver();
+        if (!vdrv || strcmp(vdrv, "KMSDRM") != 0) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "EGL passed preflight checks. Using EGL for GL context creation.");
+            SDL_SetHint(SDL_HINT_VIDEO_X11_FORCE_EGL, "1");
+        }
     }
 
     return err == GL_NO_ERROR;

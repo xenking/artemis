@@ -167,12 +167,15 @@ DrmRenderer::DrmRenderer(AVHWDeviceType hwDeviceType, IFFmpegRenderer *backendRe
 #endif
 {
     SDL_zero(m_SwFrame);
+    m_DrmStateModified = false;
 }
 
 DrmRenderer::~DrmRenderer()
 {
-    // Ensure we're out of HDR mode
-    setHdrMode(false);
+    // Only clean up HDR mode if we actually modified DRM state
+    if (m_DrmStateModified) {
+        setHdrMode(false);
+    }
 
     for (int i = 0; i < k_SwFrameCount; i++) {
         if (m_SwFrame[i].primeFd) {

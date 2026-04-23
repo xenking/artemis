@@ -73,5 +73,4 @@ private:
     int m_OldContextMajorVersion;
     int m_OldContextMinorVersion;
 
-    SDL_Renderer *m_DummyRenderer;
 };

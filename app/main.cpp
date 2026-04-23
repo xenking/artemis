@@ -1,4 +1,12 @@
 #include <QGuiApplication>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <dirent.h>
+#include <xf86drm.h>
+
+extern "C" bool g_DisableDrmHooks;
+extern "C" int g_QtDrmMasterFd;
+extern "C" struct stat g_DrmMasterStat;
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QIcon>
@@ -589,6 +597,41 @@ int main(int argc, char *argv[])
 #endif
 
     QGuiApplication app(argc, argv);
+
+    // Disable DRM master hooks when Qt is not using EGLFS (no DRM sharing needed)
+    g_DisableDrmHooks = QGuiApplication::platformName() != "eglfs";
+
+    // Pre-capture Qt EGLFS DRM master fd before SDL initializes.
+    // The DRM master hooks capture Qt's fd on drmModeSetCrtc, but Qt may not
+    // have rendered yet when SDL opens its DRM fd. Without g_QtDrmMasterFd set,
+    // the open() hook can't transfer DRM master from Qt to SDL.
+    if (QGuiApplication::platformName() == "eglfs") {
+        // Find the DRM fd that Qt EGLFS opened by scanning /proc/self/fd
+
+        DIR* dirp = opendir("/proc/self/fd");
+        if (dirp) {
+            struct dirent* dp;
+            while ((dp = readdir(dirp)) != nullptr) {
+                char linkpath[256], target[256];
+                snprintf(linkpath, sizeof(linkpath), "/proc/self/fd/%s", dp->d_name);
+                ssize_t len = readlink(linkpath, target, sizeof(target) - 1);
+                if (len > 0) {
+                    target[len] = 0;
+                    if (strncmp(target, "/dev/dri/card", 13) == 0) {
+                        int fd = atoi(dp->d_name);
+                        // Check if this fd has DRM master
+                        if (drmAuthMagic(fd, 0) != -EACCES) {
+                            g_QtDrmMasterFd = fd;
+                            fstat(fd, &g_DrmMasterStat);
+                            qInfo("Pre-captured Qt EGLFS DRM master fd: %d (%s)", fd, target);
+                            break;
+                        }
+                    }
+                }
+            }
+            closedir(dirp);
+        }
+    }
 
 #ifndef STEAM_LINK
     // Force use of the KMSDRM backend for SDL when using Qt platform plugins

@@ -64,6 +64,7 @@ public:
     virtual bool isDirectRenderingSupported() override;
     virtual int getDecoderColorspace() override;
     virtual void setHdrMode(bool enabled) override;
+    bool m_DrmStateModified;
 #ifdef HAVE_EGL
     virtual bool canExportEGL() override;
     virtual AVPixelFormat getEGLImagePixelFormat() override;

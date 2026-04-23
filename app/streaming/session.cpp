@@ -618,7 +618,7 @@ Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *prefere
       m_AudioRenderer(nullptr),
     m_AudioSampleCount(0),
     m_DropAudioEndTime(0),
-    m_QuickMenuManager(new QuickMenuManager()),
+    m_QuickMenuManager(nullptr),
     m_ServerCommandManager(new ServerCommandManager()),
     m_ClipboardManager(ClipboardManager::instance())
 {
@@ -957,14 +957,24 @@ bool Session::initialize()
     case StreamingPreferences::WM_FULLSCREEN:
 #ifdef Q_OS_DARWIN
         if (qEnvironmentVariableIntValue("I_WANT_BUGGY_FULLSCREEN") == 0) {
-            // Don't use "real" fullscreen on macOS by default. See comments above.
             m_FullScreenFlag = SDL_WINDOW_FULLSCREEN_DESKTOP;
         }
         else {
             m_FullScreenFlag = SDL_WINDOW_FULLSCREEN;
         }
 #else
-        m_FullScreenFlag = SDL_WINDOW_FULLSCREEN;
+        {
+            // On KMSDRM, SDL_WINDOW_FULLSCREEN triggers drmModeSetCrtc which
+            // corrupts the EGL surface and causes "Could not restore CRTC" /
+            // "eglSwapBuffers failed". Use FULLSCREEN_DESKTOP instead which
+            // uses the existing display mode without a modeset.
+            const char* vdrv = SDL_GetCurrentVideoDriver();
+            if (vdrv && strcmp(vdrv, "KMSDRM") == 0) {
+                m_FullScreenFlag = SDL_WINDOW_FULLSCREEN_DESKTOP;
+            } else {
+                m_FullScreenFlag = SDL_WINDOW_FULLSCREEN;
+            }
+        }
 #endif
         break;
     }
@@ -1531,19 +1541,34 @@ void Session::updateOptimalWindowDisplayMode()
         return;
     }
 
+    // On KMSDRM, matching the display mode to the video resolution avoids
+    // triggering SDL surface recreation (egl_surface_dirty) which causes
+    // "Could not restore CRTC" / "eglSwapBuffers failed" errors.
+    bool matchVideo = false;
+    {
+        const char* vdrv = SDL_GetCurrentVideoDriver();
+        if (vdrv && strcmp(vdrv, "KMSDRM") == 0) {
+            matchVideo = true;
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "KMSDRM detected: matching display mode to video resolution");
+        }
+    }
+
     // Start with the native desktop resolution and try to find
     // the highest refresh rate that our stream FPS evenly divides.
     bestMode = desktopMode;
     bestMode.refresh_rate = 0;
-    for (int i = 0; i < SDL_GetNumDisplayModes(displayIndex); i++) {
-        if (SDL_GetDisplayMode(displayIndex, i, &mode) == 0) {
-            if (mode.w == desktopMode.w && mode.h == desktopMode.h &&
-                    mode.refresh_rate % getActualFpsForDecoderTest() == 0) {
-                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                            "Found display mode with desktop resolution: %dx%dx%d",
-                            mode.w, mode.h, mode.refresh_rate);
-                if (mode.refresh_rate > bestMode.refresh_rate) {
-                    bestMode = mode;
+    if (!matchVideo) {
+        for (int i = 0; i < SDL_GetNumDisplayModes(displayIndex); i++) {
+            if (SDL_GetDisplayMode(displayIndex, i, &mode) == 0) {
+                if (mode.w == desktopMode.w && mode.h == desktopMode.h &&
+                        mode.refresh_rate % getActualFpsForDecoderTest() == 0) {
+                    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                                "Found display mode with desktop resolution: %dx%dx%d",
+                                mode.w, mode.h, mode.refresh_rate);
+                    if (mode.refresh_rate > bestMode.refresh_rate) {
+                        bestMode = mode;
+                    }
                 }
             }
         }
