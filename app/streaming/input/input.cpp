@@ -65,6 +65,12 @@ SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, i
     SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS4_RUMBLE, "1");
     SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS5_RUMBLE, "1");
 
+    // Enable HIDAPI parsing for Valve's Steam Controller / Steam Deck line so
+    // paddle buttons (SDL_CONTROLLER_BUTTON_PADDLE1..4) surface via the
+    // GameController API when the kernel hid-steam driver is unavailable.
+    // On Linux with hid-steam loaded, this is a no-op (kernel driver wins).
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_STEAM, "1");
+
     // Populate special key combo configuration
     m_SpecialKeyCombos[KeyComboQuit].keyCombo = KeyComboQuit;
     m_SpecialKeyCombos[KeyComboQuit].keyCode = SDLK_q;
