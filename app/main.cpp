@@ -1,12 +1,20 @@
 #include <QGuiApplication>
+
+#ifdef HAVE_DRM
 #include <sys/stat.h>
 #include <unistd.h>
 #include <dirent.h>
 #include <xf86drm.h>
 
+// Defined by masterhook.c / masterhook_internal.c; only built when libdrm
+// is available (see app/app.pro). main() coordinates the Qt EGLFS DRM
+// master handoff to SDL via these globals. On non-libdrm platforms
+// (macOS, Windows, libdrm-less Linux builds) the globals don't exist so
+// this block compiles out entirely.
 extern "C" bool g_DisableDrmHooks;
 extern "C" int g_QtDrmMasterFd;
 extern "C" struct stat g_DrmMasterStat;
+#endif
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QIcon>
@@ -598,6 +606,7 @@ int main(int argc, char *argv[])
 
     QGuiApplication app(argc, argv);
 
+#ifdef HAVE_DRM
     // Disable DRM master hooks when Qt is not using EGLFS (no DRM sharing needed)
     g_DisableDrmHooks = QGuiApplication::platformName() != "eglfs";
 
@@ -632,6 +641,7 @@ int main(int argc, char *argv[])
             closedir(dirp);
         }
     }
+#endif  // HAVE_DRM
 
 #ifndef STEAM_LINK
     // Force use of the KMSDRM backend for SDL when using Qt platform plugins
