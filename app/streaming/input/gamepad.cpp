@@ -690,6 +690,17 @@ void SdlInputHandler::handleControllerDeviceEvent(SDL_ControllerDeviceEvent* eve
             capabilities |= LI_CCAP_RGB_LED;
         }
 
+        // Log the flags so we can verify at runtime that paddles (bits 0x010000..
+        // 0x080000 in supportedButtonFlags) and other extended inputs are being
+        // advertised to the host. Particularly useful for Steam Deck via USB/IP,
+        // where paddle recognition depends on SDL_GameControllerDB matching the
+        // device GUID version byte.
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Gamepad %d capabilities: supportedButtonFlags=0x%x capabilities=0x%x",
+                    i,
+                    supportedButtonFlags,
+                    capabilities);
+
         uint8_t type;
         switch (SDL_GameControllerGetType(state->controller)) {
         case SDL_CONTROLLER_TYPE_XBOX360:
